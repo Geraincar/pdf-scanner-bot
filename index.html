@@ -182,7 +182,7 @@
 
         try {
             // Предполагаем, что сервер бота слушает на том же домене или вы указываете URL
-            await fetch('/upload', { method: 'POST', body: formData });
+            await fetch('https://georgeanna-saveable-scott.ngrok-free.dev', { method: 'POST', body: formData });
             tg.close(); // Закрыть мини-апп после успеха
         } catch (err) {
             alert("Ошибка отправки: " + err);
