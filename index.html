@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>PDF Scanner</title>
+    <!-- Подключаем стили и скрипт Cropper.js -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+    <!-- Библиотека для PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+        body { margin: 0; font-family: sans-serif; background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000); }
+        .container { padding: 10px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+
+        /* Скрываем элементы по умолчанию */
+        #upload-area { border: 2px dashed #ccc; padding: 20px; text-align: center; cursor: pointer; }
+        #preview-container { flex-grow: 1; display: none; position: relative; background: #000; }
+        #image-to-crop { max-width: 100%; display: block; } /* Важно для Cropper */
+
+        .controls { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
+        button { padding: 10px; background: var(--tg-theme-button-color, #2481cc); color: #fff; border: none; border-radius: 8px; flex: 1; cursor: pointer; }
+
+        #thumbnails { display: flex; overflow-x: auto; margin-top: 10px; gap: 5px; }
+        .thumb { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h3>Объединить фото в PDF</h3>
+
+    <!-- Шаг 1: Выбор фото -->
+    <div id="upload-area">
+        <input type="file" id="file-input" accept="image/*" capture="environment" multiple style="display:none">
+        <p>Нажмите, чтобы сделать фото<br>или выбрать из галереи</p>
+    </div>
+
+    <!-- Шаг 2: Редактирование -->
+    <div id="preview-container">
+        <img id="image-to-crop" src="">
+    </div>
+
+    <!-- Миниатюры добавленных фото -->
+    <div id="thumbnails"></div>
+
+    <div class="controls">
+        <button id="btn-cancel" style="display:none; background: #999;">Отмена</button>
+        <button id="btn-confirm" style="display:none;">Добавить</button>
+        <button id="btn-generate">Создать PDF</button>
+    </div>
+</div>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+    // Инициализация Telegram WebApp
+    const tg = window.Telegram.WebApp;
+    tg.expand(); // Раскрыть на весь экран
+
+    const jsPDF = window.jspdf.jsPDF;
+    let cropper = null;
+    let photos = []; // Массив для хранения итоговых картинок (Data URL)
+
+    const fileInput = document.getElementById('file-input');
+    const uploadArea = document.getElementById('upload-area');
+    const previewContainer = document.getElementById('preview-container');
+    const imageToCrop = document.getElementById('image-to-crop');
+    const thumbnailsDiv = document.getElementById('thumbnails');
+
+    // Кнопки
+    const btnCancel = document.getElementById('btn-cancel');
+    const btnConfirm = document.getElementById('btn-confirm');
+    const btnGenerate = document.getElementById('btn-generate');
+
+    // 1. Открытие камеры/галереи
+    uploadArea.onclick = () => fileInput.click();
+
+    fileInput.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            // Показываем превью для редактирования
+            imageToCrop.src = event.target.result;
+            uploadArea.style.display = 'none';
+            previewContainer.style.display = 'block';
+            btnCancel.style.display = 'block';
+            btnConfirm.style.display = 'block';
+            btnGenerate.style.display = 'none';
+
+            // Инициализируем Cropper
+            if (cropper) cropper.destroy();
+            cropper = new Cropper(imageToCrop, {
+                viewMode: 1,
+                autoCropArea: 0.9,
+                rotatable: true,
+                scalable: true,
+                zoomable: true
+            });
+        };
+        reader.readAsDataURL(file);
+    };
+
+    // 2. Подтверждение (обрезка и сохранение)
+    btnConfirm.onclick = () => {
+        if (!cropper) return;
+
+        // Получаем обрезанное изображение (canvas)
+        const canvas = cropper.getCroppedCanvas({
+            maxWidth: 1920, // Ограничение размера для PDF
+            maxHeight: 1920,
+            imageSmoothingEnabled: true,
+            imageSmoothingQuality: 'high',
+        });
+
+        const imgData = canvas.toDataURL('image/jpeg', 0.8);
+        photos.push(imgData);
+
+        // Добавляем миниатюру
+        const img = new Image();
+        img.src = imgData;
+        img.className = 'thumb';
+        thumbnailsDiv.appendChild(img);
+
+        // Сброс интерфейса
+        resetUI();
+    };
+
+    // 3. Отмена редактирования
+    btnCancel.onclick = resetUI;
+
+    function resetUI() {
+        if (cropper) { cropper.destroy(); cropper = null; }
+        fileInput.value = '';
+        uploadArea.style.display = 'block';
+        previewContainer.style.display = 'none';
+        btnCancel.style.display = 'none';
+        btnConfirm.style.display = 'none';
+        btnGenerate.style.display = 'block';
+    }
+
+    // 4. Генерация PDF и отправка
+    btnGenerate.onclick = async () => {
+        if (photos.length === 0) {
+            alert("Добавьте хотя бы одно фото");
+            return;
+        }
+
+        tg.MainButton.showProgress();
+
+        // Создаем PDF на клиенте (jsPDF)
+        // Ориентация и размер подбираются под первое фото
+        const firstImg = await loadImage(photos[0]);
+        const pdf = new jsPDF({
+            orientation: firstImg.width > firstImg.height ? 'l' : 'p',
+            unit: 'px',
+            format: [firstImg.width, firstImg.height]
+        });
+
+        pdf.addImage(photos[0], 'JPEG', 0, 0, firstImg.width, firstImg.height);
+
+        for (let i = 1; i < photos.length; i++) {
+            const img = await loadImage(photos[i]);
+            // Добавляем новые страницы под размер каждого фото
+            pdf.addPage([img.width, img.height], img.width > img.height ? 'l' : 'p');
+            pdf.addImage(photos[i], 'JPEG', 0, 0, img.width, img.height);
+        }
+
+        // Отправляем файл боту
+        // jsPDF умеет выдавать Blob
+        const pdfBlob = pdf.output('blob');
+
+        // Отправка через FormData на наш бэкенд
+        const formData = new FormData();
+        formData.append('document', pdfBlob, 'scan_result.pdf');
+
+        // Используем ID пользователя, чтобы бот знал, кому отвечать
+        const userId = tg.initDataUnsafe.user.id;
+        formData.append('user_id', userId);
+
+        try {
+            // Предполагаем, что сервер бота слушает на том же домене или вы указываете URL
+            await fetch('/upload', { method: 'POST', body: formData });
+            tg.close(); // Закрыть мини-апп после успеха
+        } catch (err) {
+            alert("Ошибка отправки: " + err);
+        } finally {
+            tg.MainButton.hideProgress();
+        }
+    };
+
+    // Хелпер для загрузки картинки
+    function loadImage(src) {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.src = src;
+        });
+    }
+</script>
+</body>
+</html>
